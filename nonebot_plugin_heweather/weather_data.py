@@ -56,7 +56,11 @@ class Weather:
         self.__reference = "\n请参考: https://dev.qweather.com/docs/start/status-code/"
 
     async def load_data(self):
-        self.city_id = await self._get_city_id()
+        location = await self._get_city_location()
+        self.city_name = location["name"]
+        self.city_id = location['id']
+        self.city_lat = location['lat']
+        self.city_lon = location['lon']
         (
             self.now,
             self.daily,
@@ -64,7 +68,11 @@ class Weather:
             self.warning,
             self.hourly,
         ) = await asyncio.gather(
-            self._now, self._daily, self._air, self._warning, self._hourly
+            self._now,
+            self._daily,
+            self._air,
+            self._warning,
+            self._hourly,
         )
         self._data_validate()
 
@@ -86,7 +94,7 @@ class Weather:
             res = await client.get(url, params=params, headers=headers)
         return res
 
-    async def _get_city_id(self):
+    async def _get_city_location(self):
         url = self.host.join("/geo/v2/city/lookup")
         res = await self._get_data(
             url=url,
@@ -100,8 +108,7 @@ class Weather:
         elif res["code"] != "200":
             raise APIError("错误! 错误代码: {}".format(res["code"]) + self.__reference)
         else:
-            self.city_name = res["location"][0]["name"]
-            return res["location"][0]["id"]
+            return res["location"][0]
 
     def _data_validate(self):
         if self.now.code == "200" and self.daily.code == "200":
@@ -111,7 +118,7 @@ class Weather:
                 "错误! 请检查配置! "
                 f"错误代码: now: {self.now.code}  "
                 f"daily: {self.daily.code}  "
-                + "air: {}  ".format(self.air.code if self.air else "None")
+                # + "air: {}  ".format(self.air.code if self.air else "None")
                 + "warning: {}".format(self.warning.code if self.warning else "None")
                 + self.__reference
             )
@@ -145,13 +152,42 @@ class Weather:
 
     @property
     async def _air(self) -> AirApi:
-        url = self.host.join("/v7/air/now")
+        url = self.host.join(f"/airquality/v1/current/{self.city_lat}/{self.city_lon}")
         res = await self._get_data(
             url=url,
-            params={"location": self.city_id},
+            params={},
         )
-        self._check_response(res)
-        return AirApi(**res.json())
+        # self._check_response(res)
+        if res.status_code != 200:
+            logger.error(f"Air API Response code:{res.status_code}")
+            return AirApi(code=str(res.status_code), now=None)
+        raw = res.json()
+        # print('air raw:', raw)
+        def get_dict(key: str, code: str):
+            dict_list = raw.get(key, [])
+            for item in dict_list:
+                if item.get('code', None) == code:
+                    return item
+            return {}
+        base = raw.get('indexes', [])[0] or {}
+        color = base.get('color', {})
+        air_now = {
+            'category': base.get('category', ''),
+            'tag_color': f"rgba({color.get('red',0)},{color.get('green',0)},{color.get('blue',0)},{color.get('alpha',1)})" if color else None,
+            'aqi': str(base.get('aqi', 0)),
+            'pm2p5': str(get_dict('pollutants', 'pm2p5').get('concentration', {}).get('value', '')),
+            'pm10': str(get_dict('pollutants', 'pm10').get('concentration', {}).get('value', '')),
+            'o3': str(get_dict('pollutants', 'o3').get('concentration', {}).get('value', '')),
+            'co': str(get_dict('pollutants', 'co').get('concentration', {}).get('value', '')),
+            'no2': str(get_dict('pollutants', 'no2').get('concentration', {}).get('value', '')),
+            'so2': str(get_dict('pollutants', 'so2').get('concentration', {}).get('value', '')),
+        }
+        air = {
+            'code': res.status_code,
+            'now': air_now,
+        }
+        # return AirApi(**res.json())
+        return AirApi(**air)
 
     @property
     async def _warning(self) -> WarningApi | None:
@@ -160,8 +196,13 @@ class Weather:
             url=url,
             params={"location": self.city_id},
         )
-        self._check_response(res)
-        return None if res.json().get("code") == "204" else WarningApi(**res.json())
+        # self._check_response(res)
+        if res.status_code != 200:
+            logger.error(f"Warning API Response code:{res.status_code}")
+            return None
+        if res.json().get("code") == "204":
+            return None
+        return WarningApi(**res.json())
 
     @property
     async def _hourly(self) -> HourlyApi:

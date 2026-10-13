@@ -5,8 +5,23 @@
   <link rel="stylesheet" href="css/weather.css">
   <link rel="stylesheet" href="css/qweather-icons.css">
   <script>
+function fixTextColor(dom) {
+    var color = window.getComputedStyle(dom).backgroundColor;
+    var rgb = color.match(/\d+/g);
+    var r = parseInt(rgb[0]);
+    var g = parseInt(rgb[1]);
+    var b = parseInt(rgb[2]);
+    var brightness = (r * 213 + g * 715 + b * 72) / 1000;
+    if (brightness <= 128) {
+        dom.style.color = "white";
+    } else {
+        dom.style.color = "#333";
+    }
+}
+
 window.onload = function () {
     color();
+    drawTempCurve();
 };
 function color() {
     var date = new Date();
@@ -24,6 +39,145 @@ function color() {
         }
         document.body.style.color = "#cecece";
     }
+}
+
+function catmullRomToBezier(points) {
+    if (points.length < 2) return '';
+    if (points.length === 2) {
+        return 'M ' + points[0].x + ',' + points[0].y + ' L ' + points[1].x + ',' + points[1].y;
+    }
+    var d = 'M ' + points[0].x + ',' + points[0].y;
+    for (var i = 0; i < points.length - 1; i++) {
+        var p0 = points[Math.max(0, i - 1)];
+        var p1 = points[i];
+        var p2 = points[i + 1];
+        var p3 = points[Math.min(points.length - 1, i + 2)];
+        var cp1x = p1.x + (p2.x - p0.x) / 6;
+        var cp1y = p1.y + (p2.y - p0.y) / 6;
+        var cp2x = p2.x - (p3.x - p1.x) / 6;
+        var cp2y = p2.y - (p3.y - p1.y) / 6;
+        d += ' C ' + cp1x.toFixed(1) + ',' + cp1y.toFixed(1) + ' ' + cp2x.toFixed(1) + ',' + cp2y.toFixed(1) + ' ' + p2.x.toFixed(1) + ',' + p2.y.toFixed(1);
+    }
+    return d;
+}
+
+function getTimeColor(hourNum) {
+    var warm = [245, 158, 11];
+    var cold = [66, 123, 255];
+    var t = 0;
+    if (hourNum >= 9 && hourNum <= 17) {
+        t = 1;
+    } else if (hourNum >= 7 && hourNum < 9) {
+        t = (hourNum - 7) / 2;
+    } else if (hourNum > 17 && hourNum <= 19) {
+        t = (19 - hourNum) / 2;
+    }
+    var r = Math.round(cold[0] + (warm[0] - cold[0]) * t);
+    var g = Math.round(cold[1] + (warm[1] - cold[1]) * t);
+    var b = Math.round(cold[2] + (warm[2] - cold[2]) * t);
+    return 'rgb(' + r + ',' + g + ',' + b + ')';
+}
+
+function drawTempCurve() {
+    var svg = document.getElementById('temp-curve');
+    var hourBox = document.getElementById('hour-box');
+    if (!svg || !hourBox) return;
+    var hourDatas = hourBox.querySelectorAll('.hour-data[data-temp]');
+    var curveSpaces = hourBox.querySelectorAll('.curve-space');
+    if (hourDatas.length === 0 || curveSpaces.length === 0) return;
+
+    var boxRect = hourBox.getBoundingClientRect();
+    var firstCurve = curveSpaces[0].getBoundingClientRect();
+    var curveTop = firstCurve.top - boxRect.top;
+    var curveHeight = firstCurve.height;
+
+    var temps = [];
+    var hourNums = [];
+    hourDatas.forEach(function(el) {
+        temps.push(parseInt(el.getAttribute('data-temp')));
+        hourNums.push(parseInt(el.getAttribute('data-hour')));
+    });
+    var minTemp = Math.min.apply(null, temps);
+    var maxTemp = Math.max.apply(null, temps);
+    var range = maxTemp - minTemp || 1;
+
+    var padding = 10;
+    var points = [];
+    hourDatas.forEach(function(el, i) {
+        var rect = el.getBoundingClientRect();
+        var x = rect.left + rect.width / 2 - boxRect.left;
+        var y = curveTop + padding + (1 - (temps[i] - minTemp) / range) * (curveHeight - 2 * padding);
+        points.push({x: x, y: y});
+    });
+
+    var svgWidth = boxRect.width;
+    var svgHeight = boxRect.height;
+    svg.setAttribute('width', svgWidth);
+    svg.setAttribute('height', svgHeight);
+    svg.setAttribute('viewBox', '0 0 ' + svgWidth + ' ' + svgHeight);
+    svg.innerHTML = '';
+
+    var defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+
+    // Stroke gradient: time-based warm/cold colors
+    var strokeGrad = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+    strokeGrad.setAttribute('id', 'curveStroke');
+    strokeGrad.setAttribute('x1', '0%');
+    strokeGrad.setAttribute('y1', '0%');
+    strokeGrad.setAttribute('x2', '100%');
+    strokeGrad.setAttribute('y2', '0%');
+    points.forEach(function(p, i) {
+        var stop = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+        stop.setAttribute('offset', (p.x / svgWidth * 100).toFixed(1) + '%');
+        stop.setAttribute('stop-color', getTimeColor(hourNums[i]));
+        strokeGrad.appendChild(stop);
+    });
+    defs.appendChild(strokeGrad);
+
+    // Fill gradient: same time-based horizontal colors with low opacity
+    var fillGrad = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+    fillGrad.setAttribute('id', 'curveFill');
+    fillGrad.setAttribute('x1', '0%');
+    fillGrad.setAttribute('y1', '0%');
+    fillGrad.setAttribute('x2', '100%');
+    fillGrad.setAttribute('y2', '0%');
+    points.forEach(function(p, i) {
+        var stop = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+        stop.setAttribute('offset', (p.x / svgWidth * 100).toFixed(1) + '%');
+        stop.setAttribute('stop-color', getTimeColor(hourNums[i]));
+        stop.setAttribute('stop-opacity', '0.3');
+        fillGrad.appendChild(stop);
+    });
+    defs.appendChild(fillGrad);
+    svg.appendChild(defs);
+
+    var curvePath = catmullRomToBezier(points);
+
+    var fillD = curvePath + ' L ' + points[points.length-1].x + ',' + (curveTop + curveHeight) + ' L ' + points[0].x + ',' + (curveTop + curveHeight) + ' Z';
+    var fillPathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    fillPathEl.setAttribute('d', fillD);
+    fillPathEl.setAttribute('fill', 'url(#curveFill)');
+    svg.appendChild(fillPathEl);
+
+    var linePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    linePath.setAttribute('d', curvePath);
+    linePath.setAttribute('fill', 'none');
+    linePath.setAttribute('stroke', 'url(#curveStroke)');
+    linePath.setAttribute('stroke-width', '3');
+    linePath.setAttribute('stroke-linecap', 'round');
+    linePath.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(linePath);
+
+    points.forEach(function(p, i) {
+        var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', p.x);
+        circle.setAttribute('cy', p.y);
+        circle.setAttribute('r', '4');
+        circle.setAttribute('fill', '#fff');
+        circle.setAttribute('stroke', getTimeColor(hourNums[i]));
+        circle.setAttribute('stroke-width', '2');
+        svg.appendChild(circle);
+    });
 }
 </script>
 </head>
@@ -83,61 +237,59 @@ function color() {
 
     {% if air %}
     <div class="air" id="air">
-      <div class="air-box-top">
+      <!-- <div class="air-box-top">
           <span class="air-tag" style="background-color:{{ air['tag_color'] }};">{{ air["aqi"] }} {{ air["category"] }}</span>
-      </div>
+      </div> -->
+      <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var airTag = document.querySelector('.air-tag');
+            fixTextColor(airTag);
+        });
+      </script>
       <div class="air-box">
-          <div class="air-data">
-              <p>{{ air["pm2p5"] }}</p>
-              <meter value="{{ air['pm2p5'] }}" min="0" max="200"></meter>
-              <p class="des">PM2.5</p>
+          {% for p in air["pollutants"] %}
+          <div class="air-data{% if p['is_primary'] %} air-data-primary{% endif %}">
+              <p class="air-value">{{ p["value"] }}<span class="air-unit">{{ p["unit"] | safe }}</span></p>
+              <div class="air-row">
+                <div class="air-bar"><div class="air-bar-fill" style="width: {{ p['percent'] }}%; background-color: {{ p['color'] }};"></div></div>
+                <p class="air-level" style="color: {{ p['color'] }};">{{ p["level"] }}</p>
+              </div>
+              <p class="des">{{ p["name"] | safe }}</p>
+              {% if p['is_primary'] %}<span class="air-primary-tag">首要</span>{% endif %}
           </div>
-          <div class="air-data">
-              <p>{{ air["pm10"] }}</p>
-              <meter value="{{ air['pm10'] }}" min="0" max="200"></meter>
-              <p class="des">PM10</p>
-          </div>
-          <div class="air-data">
-              <p>{{ air["o3"] }}</p>
-              <meter value="{{ air['o3'] }}" min="0" max="200"></meter>
-              <p class="des">O<sub>3</sub></p>
-          </div>
-          <div class="air-data">
-              <p>{{ air["co"] }}</p>
-              <meter value="{{ air['co'] }}" min="0" max="200"></meter>
-              <p class="des">CO</p>
-          </div>
-          <div class="air-data">
-              <p>{{ air["no2"] }}</p>
-              <meter value="{{ air['no2'] }}" min="0" max="200"></meter>
-              <p class="des">NO<sub>2</sub></p>
-          </div>
-          <div class="air-data">
-              <p>{{ air["so2"] }}</p>
-              <meter value="{{ air['so2'] }}" min="0" max="200"></meter>
-              <p class="des">SO<sub>2</sub></p>
-          </div>
+          {% endfor %}
       </div>
   </div>
   {% endif %}
 
     <div class="hours-weather" id="hours-weather">
-      <div class="hour-box">
+      <div class="hour-box" id="hour-box">
         {% for hour in hours %}
-        <div class="hour-data">
-          <div class="hour-data">      
-            <p>{{ hour["temp"] }}°</p>
-            <div class="tem-vert-line-box"><div class="tem-vert-line" style="height: {{ hour['temp_percent'] }};"></div></div>
-            <p class="qi-{{ hour['icon'] }} icon-size"></p>
-            <p class="hour-des">{{ hour["hour"] }}</p>
-          </div>
+        <div class="hour-data" data-temp="{{ hour['temp'] }}" data-hour="{{ hour['hour_num'] }}">
+          <p>{{ hour["temp"] }}°</p>
+          <div class="curve-space"></div>
+          <p class="qi-{{ hour['icon'] }} icon-size-hour"></p>
+          <p class="hour-des">{{ hour["hour"] }}</p>
         </div>
         {% endfor %}
+        <svg class="temp-curve-svg" id="temp-curve"></svg>
       </div>
     </div>
 
     <div class="days-weather" id="days-weather">
+      {% set ns = namespace(min_temp=999, max_temp=-999) %}
+      {% for d in days %}
+        {% set t_min = d['tempMin'] | int %}
+        {% set t_max = d['tempMax'] | int %}
+        {% set ns.min_temp = [ns.min_temp, t_min] | min %}
+        {% set ns.max_temp = [ns.max_temp, t_max] | max %}
+      {% endfor %}
+      {% set range = [1, ns.max_temp - ns.min_temp] | max %}
       {% for day in days %}
+        {% set t_min = day['tempMin'] | int %}
+        {% set t_max = day['tempMax'] | int %}
+        {% set left_pct = ((t_min - ns.min_temp) / range * 100) | round(1) %}
+        {% set width_pct = ((t_max - t_min) / range * 100) | round(1) %}
       <div class="days">
         <!-- 1 -->
         <div class="week-date">
@@ -146,31 +298,30 @@ function color() {
         </div>
         <!-- 2 -->
         <div class="tem-text">
-          <p class="days-temp">{{ day["tempMax"] }}°</p>
-          <p class="days-text">{{ day["textDay"] }}</p>
+          <p class="days-temp">{{ day["tempMin"] }}°</p>
+          <p class="days-text">{{ day["textNight"] }}</p>
         </div>
         <!-- 3 -->
         <div class="tem-line-box">
 
           <div class="days-icon">
-            <div>
-              <em class="qi-{{ day['iconDay'] }} icon-size icon-day"></em>
-
-            </div>
             <div class="icon-night">
               <em class="qi-{{ day['iconNight'] }} icon-size icon-night"></em>
+            </div>
+            <div>
+              <em class="qi-{{ day['iconDay'] }} icon-size icon-day"></em>
             </div>
           </div>
 
           <div class="tem-line-outbox">
-            <div class="tem-line"></div>
+            <div class="tem-line" style="left: {{ left_pct }}%; width: {{ width_pct }}%;"></div>
           </div>
 
         </div>
         <!-- 4 -->
         <div class="tem-text">
-          <p class="days-temp">{{ day["tempMin"] }}°</p>
-          <p class="days-text">{{ day["textNight"]}}</p>
+          <p class="days-temp">{{ day["tempMax"] }}°</p>
+          <p class="days-text">{{ day["textDay"] }}</p>
 
         </div>
       </div>
