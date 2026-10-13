@@ -183,7 +183,7 @@ class Weather:
             'so2': str(get_dict('pollutants', 'so2').get('concentration', {}).get('value', '')),
         }
         air = {
-            'code': res.status_code,
+            'code': str(res.status_code),
             'now': air_now,
         }
         # return AirApi(**res.json())
